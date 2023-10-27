@@ -1,34 +1,63 @@
-// Dies ist die Hauptanweisung, die das Go-Programm startet.
 package main
 
-// Wir importieren Funktionen, um mit dem Internet und HTTP zu arbeiten.
 import (
+	"encoding/json"
+	"log"
 	"net/http"
+	"os"
+	"strconv"
 
-	"github.com/gin-gonic/gin" // Wir importieren das Gin-Framework, um Webseiten zu erstellen und zu bedienen.
+	"github.com/gin-gonic/gin"
 )
 
-func main() {
-	// Hier erstellen wir einen neuen Webserver.
-	router := gin.Default()
+const jsonFilePath = "albums.json"
 
-	// Hier fügen wir eine spezielle Regel hinzu, die es dem Server erlaubt, Anfragen von verschiedenen Orten zu akzeptieren.
-	// Dies ist wichtig, wenn Sie Anfragen von einer anderen Webseite erhalten.
+type album struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Artist string `json:"artist"`
+	Price  string `json:"price"`
+}
+
+func loadAlbums() []album {
+	file, err := os.Open(jsonFilePath)
+	if err != nil {
+		log.Fatal("Fehler beim Öffnen der JSON-Datei:", err)
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	var albums []album
+	if err := decoder.Decode(&albums); err != nil {
+		log.Fatal("Fehler beim Parsen der JSON-Datei:", err)
+	}
+	return albums
+}
+
+func saveAlbums(albums []album) {
+	file, err := os.Create(jsonFilePath)
+	if err != nil {
+		log.Fatal("Fehler beim Erstellen der JSON-Datei:", err)
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	if err := encoder.Encode(albums); err != nil {
+		log.Fatal("Fehler beim Schreiben der Albumdaten in die JSON-Datei:", err)
+	}
+}
+
+func main() {
+	router := gin.Default()
 	router.Use(CORSMiddleware())
 
-	// Hier definieren wir, dass der Server auf Anfragen an die Adresse "/albums" reagiert.
-	// Wenn jemand nach "/albums" fragt, zeigen wir ihm die Liste der Alben an.
 	router.GET("/albums", getAlbums)
-
-	// Hier sagen wir dem Server, dass er auf Anfragen an "/albums" reagieren soll, aber dieses Mal
-	// um ein neues Album zu erstellen.
 	router.POST("/albums", createAlbum)
+	router.DELETE("/albums", deleteAlbum)
 
-	// Hier starten wir den Server auf dem Computer, damit er auf Anfragen von anderen Computern hören kann.
 	router.Run("localhost:8081")
 }
 
-// Diese Funktion konfiguriert die CORS-Regeln, die den Zugriff von verschiedenen Orten erlauben.
 func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
@@ -44,42 +73,53 @@ func CORSMiddleware() gin.HandlerFunc {
 
 		c.Next()
 	}
+
 }
 
-// Hier definieren wir die Struktur eines Musikalbums.
-type album struct {
-	ID     string  `json:"id"`     // Jedes Album hat eine eindeutige Kennung (ID).
-	Title  string  `json:"title"`  // Es hat auch einen Titel.
-	Artist string  `json:"artist"` // Der Name des Künstlers oder der Band.
-	Price  float64 `json:"price"`  // Und den Preis des Albums.
-}
-
-// Hier haben wir Beispieldaten für einige Alben.
-var albums = []album{
-	{ID: "1", Title: "Blue Train", Artist: "John Coltrane", Price: 56.99},
-	{ID: "2", Title: "Jeru", Artist: "Gerry Mulligan", Price: 17.99},
-	{ID: "3", Title: "Sarah Vaughan and Clifford Brown", Artist: "Sarah Vaughan", Price: 39.99},
-}
-
-// Hier sagen wir dem Server, wie er auf Anfragen nach der Liste der Alben reagieren soll.
 func getAlbums(c *gin.Context) {
-	// Wir senden die Liste der Alben zurück, wenn jemand danach fragt.
+	albums := loadAlbums()
 	c.IndentedJSON(http.StatusOK, albums)
 }
 
-// Hier zeigen wir dem Server, wie er auf Anfragen zum Erstellen eines neuen Albums reagieren soll.
 func createAlbum(c *gin.Context) {
-	// Wir nehmen die Daten, die uns jemand gesendet hat, um ein neues Album zu erstellen.
-	// Wenn es Fehler gibt, teilen wir dem Sender das mit.
 	var newAlbum album
 	if err := c.ShouldBindJSON(&newAlbum); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Wenn alles in Ordnung ist, fügen wir das neue Album zur Liste der Alben hinzu.
+	albums := loadAlbums()
+	newAlbum.ID = generateUniqueID(albums)
 	albums = append(albums, newAlbum)
-
-	// Und wir sagen dem Sender, dass das Album erfolgreich erstellt wurde.
+	saveAlbums(albums)
 	c.JSON(http.StatusCreated, newAlbum)
+}
+
+func deleteAlbum(c *gin.Context) {
+	var deleteRequest struct {
+		IDs []string `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&deleteRequest); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	albums := loadAlbums()
+	idIndex := make(map[string]bool)
+	for _, id := range deleteRequest.IDs {
+		idIndex[id] = true
+	}
+
+	for i := len(albums) - 1; i >= 0; i-- {
+		if idIndex[albums[i].ID] {
+			albums = append(albums[:i], albums[i+1:]...)
+		}
+	}
+	saveAlbums(albums)
+
+	c.JSON(http.StatusOK, gin.H{"message": "Selected items deleted"})
+}
+
+func generateUniqueID(albums []album) string {
+	return strconv.Itoa(len(albums) + 1)
 }
